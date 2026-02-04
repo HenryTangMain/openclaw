@@ -1,129 +1,117 @@
----
-summary: "WebSocket gateway architecture, components, and client flows"
-read_when:
-  - Working on gateway protocol, clients, or transports
-title: "Gateway Architecture"
----
+# OpenClaw System Architecture
 
-# Gateway architecture
+This section provides comprehensive documentation of OpenClaw's system architecture, covering the overall design, key subsystems, and architectural patterns.
 
-Last updated: 2026-01-22
+Last updated: 2026-02-03
 
 ## Overview
 
-- A single long‑lived **Gateway** owns all messaging surfaces (WhatsApp via
-  Baileys, Telegram via grammY, Slack, Discord, Signal, iMessage, WebChat).
-- Control-plane clients (macOS app, CLI, web UI, automations) connect to the
-  Gateway over **WebSocket** on the configured bind host (default
-  `127.0.0.1:18789`).
-- **Nodes** (macOS/iOS/Android/headless) also connect over **WebSocket**, but
-  declare `role: node` with explicit caps/commands.
-- One Gateway per host; it is the only place that opens a WhatsApp session.
-- A **canvas host** (default `18793`) serves agent‑editable HTML and A2UI.
+OpenClaw is a unified platform for AI agent orchestration across multiple messaging channels. The architecture is designed around several key principles:
 
-## Components and flows
+- **Modularity**: Plugin-based extensibility for channels, tools, and services
+- **Scalability**: Support for multiple concurrent agents and sessions
+- **Flexibility**: Configuration-driven behavior with hot reloading
+- **Security**: Isolated plugin runtime and credential management
+- **Observability**: Comprehensive logging, monitoring, and diagnostics
 
-### Gateway (daemon)
+## Architecture Documents
 
-- Maintains provider connections.
-- Exposes a typed WS API (requests, responses, server‑push events).
-- Validates inbound frames against JSON Schema.
-- Emits events like `agent`, `chat`, `presence`, `health`, `heartbeat`, `cron`.
+### Core Architecture
 
-### Clients (mac app / CLI / web admin)
+- [System Architecture](./system-architecture.md)
+  - High-level system overview using C4 Model
+  - Container and component diagrams
+  - Key architectural decisions
 
-- One WS connection per client.
-- Send requests (`health`, `status`, `send`, `agent`, `system-presence`).
-- Subscribe to events (`tick`, `agent`, `presence`, `shutdown`).
+- [Plugin Architecture](./plugin-architecture.md)
+  - Plugin system design and lifecycle
+  - Extension points and registration
+  - Runtime isolation and dependency injection
 
-### Nodes (macOS / iOS / Android / headless)
+- [Channel and Provider Architecture](./channel-provider-architecture.md)
+  - Unified channel interface design
+  - Message flow and normalization
+  - Provider abstraction and selection
 
-- Connect to the **same WS server** with `role: node`.
-- Provide a device identity in `connect`; pairing is **device‑based** (role `node`) and
-  approval lives in the device pairing store.
-- Expose commands like `canvas.*`, `camera.*`, `screen.record`, `location.get`.
+- [Agent Runtime Architecture](./agent-runtime-architecture.md)
+  - AI agent orchestration
+  - Session lifecycle and context management
+  - Tool execution and memory system
 
-Protocol details:
+- [Data & State Architecture](./data-state-architecture.md)
+  - Configuration management and validation
+  - State persistence and synchronization
+  - Memory system integration
 
-- [Gateway protocol](/gateway/protocol)
+### Specific Subsystems
 
-### WebChat
+For specific subsystems, see also:
 
-- Static UI that uses the Gateway WS API for chat history and sends.
-- In remote setups, connects through the same SSH/Tailscale tunnel as other
-  clients.
+- [Gateway Architecture](./gateway.md) - Legacy WebSocket gateway documentation
+- [Agent Concepts](./agent.md) - Agent-specific concepts
+- [Channel Routing](./channel-routing.md) - Message routing design
+- [Sessions](./sessions.md) - Session management details
+- [Memory](./memory.md) - Memory system documentation
+- [Plugins](./plugin-architecture.md) - Plugin system architecture
 
-## Connection lifecycle (single client)
+## System Context
 
+OpenClaw operates as an AI agent platform that bridges multiple messaging channels with AI providers through a unified interface. The system handles:
+
+- Message reception and delivery across platforms
+- AI agent execution and context management
+- Plugin-based extensibility
+- Configuration management and validation
+- Real-time monitoring and diagnostics
+
+### Key Components
+
+```mermaid
+graph TB
+    subgraph "User Interfaces"
+        CLI["CLI Application"]
+        GatewayUI["Web Dashboard"]
+        DesktopApp["Desktop App"]
+    end
+
+    subgraph "Core Engine"
+        AgentRuntime["Agent Runtime"]
+        ChannelSystem["Channel System"]
+        PluginSystem["Plugin System"]
+        ConfigManager["Configuration Manager"]
+    end
+
+    subgraph "External Services"
+        AIProviders["AI Providers"]
+        MessagingPlatforms["Messaging Platforms"]
+        ExternalAPIs["External APIs"]
+    end
+
+    CLI --> CoreEngine
+    GatewayUI --> GatewayAPI
+    DesktopApp --> GatewayAPI
+
+    AgentRuntime --> AIProviders
+    ChannelSystem --> MessagingPlatforms
+    PluginSystem --> ExternalAPIs
 ```
-Client                    Gateway
-  |                          |
-  |---- req:connect -------->|
-  |<------ res (ok) ---------|   (or res error + close)
-  |   (payload=hello-ok carries snapshot: presence + health)
-  |                          |
-  |<------ event:presence ---|
-  |<------ event:tick -------|
-  |                          |
-  |------- req:agent ------->|
-  |<------ res:agent --------|   (ack: {runId,status:"accepted"})
-  |<------ event:agent ------|   (streaming)
-  |<------ res:agent --------|   (final: {runId,status,summary})
-  |                          |
-```
 
-## Wire protocol (summary)
+## Technology Stack
 
-- Transport: WebSocket, text frames with JSON payloads.
-- First frame **must** be `connect`.
-- After handshake:
-  - Requests: `{type:"req", id, method, params}` → `{type:"res", id, ok, payload|error}`
-  - Events: `{type:"event", event, payload, seq?, stateVersion?}`
-- If `OPENCLAW_GATEWAY_TOKEN` (or `--token`) is set, `connect.params.auth.token`
-  must match or the socket closes.
-- Idempotency keys are required for side‑effecting methods (`send`, `agent`) to
-  safely retry; the server keeps a short‑lived dedupe cache.
-- Nodes must include `role: "node"` plus caps/commands/permissions in `connect`.
+### Core Technologies
 
-## Pairing + local trust
+- **Runtime**: Node.js 22+ (ESM)
+- **Language**: TypeScript
+- **Build**: `tsdown` for compilation
+- **Testing**: Vitest with V8 coverage
+- **Linting**: Oxc (`oxlint`, `oxfmt`)
 
-- All WS clients (operators + nodes) include a **device identity** on `connect`.
-- New device IDs require pairing approval; the Gateway issues a **device token**
-  for subsequent connects.
-- **Local** connects (loopback or the gateway host’s own tailnet address) can be
-  auto‑approved to keep same‑host UX smooth.
-- **Non‑local** connects must sign the `connect.challenge` nonce and require
-  explicit approval.
-- Gateway auth (`gateway.auth.*`) still applies to **all** connections, local or
-  remote.
+### Key Libraries
 
-Details: [Gateway protocol](/gateway/protocol), [Pairing](/start/pairing),
-[Security](/gateway/security).
+- **CLI**: Commander.js
+- **Schema Validation**: Zod
+- **HTTP Server**: Hono/Express
+- **WebSocket**: ws
+- **File Watching**: chokidar
 
-## Protocol typing and codegen
-
-- TypeBox schemas define the protocol.
-- JSON Schema is generated from those schemas.
-- Swift models are generated from the JSON Schema.
-
-## Remote access
-
-- Preferred: Tailscale or VPN.
-- Alternative: SSH tunnel
-  ```bash
-  ssh -N -L 18789:127.0.0.1:18789 user@host
-  ```
-- The same handshake + auth token apply over the tunnel.
-- TLS + optional pinning can be enabled for WS in remote setups.
-
-## Operations snapshot
-
-- Start: `openclaw gateway` (foreground, logs to stdout).
-- Health: `health` over WS (also included in `hello-ok`).
-- Supervision: launchd/systemd for auto‑restart.
-
-## Invariants
-
-- Exactly one Gateway controls a single Baileys session per host.
-- Handshake is mandatory; any non‑JSON or non‑connect first frame is a hard close.
-- Events are not replayed; clients must refresh on gaps.
+For more details about the gateway architecture specifically, see the [Gateway Architecture](./gateway.md) document.
